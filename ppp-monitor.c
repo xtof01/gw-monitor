@@ -3,6 +3,7 @@
 #include <string.h>
 #include <limits.h>
 
+#include <time.h>
 #include <libmnl/libmnl.h>
 #include <linux/rtnetlink.h>
 #include <netinet/in.h>
@@ -27,13 +28,6 @@ void syntax(void)
 }
 
 
-void timeout_cb(EV_P_ ev_timer *w, int revents)
-{
-    printf("timeout\n");
-    ev_break(EV_A_ EVBREAK_ALL);
-}
-
-
 size_t af_addr_size(unsigned char family)
 {
     switch (family) {
@@ -44,88 +38,6 @@ size_t af_addr_size(unsigned char family)
     default:
         return UINT_MAX;
     }
-}
-
-
-int parse_addr_attr_cb(const struct nlattr *attr, void *data)
-{
-    if (mnl_attr_type_valid(attr, RTA_MAX) < 0)
-        return MNL_CB_OK;
-
-    char addr[INET6_ADDRSTRLEN];
-    unsigned char ifa_family = (unsigned char)(uintptr_t)data;
-    size_t addrsize = af_addr_size(ifa_family);
-    int type = mnl_attr_get_type(attr);
-
-    printf("      rta_type: %s\n", ifa_rta_type2str(type));
-
-    switch (type) {
-    case IFA_ADDRESS:
-    case IFA_LOCAL:
-    case IFA_BROADCAST:
-    case IFA_ANYCAST:
-        if (mnl_attr_validate2(attr, MNL_TYPE_BINARY, addrsize) < 0) {
-            perror("mnl_attr_validate2");
-            return MNL_CB_ERROR;
-        }
-        break;
-
-    case IFA_CACHEINFO:
-        if (mnl_attr_validate2(attr, MNL_TYPE_BINARY, sizeof (struct ifa_cacheinfo)) < 0) {
-            perror("mnl_attr_validate2");
-            return MNL_CB_ERROR;
-        }
-        break;
-
-    case IFA_LABEL:
-        if (mnl_attr_validate(attr, MNL_TYPE_NUL_STRING) < 0) {
-            perror("mnl_attr_validate");
-            return MNL_CB_ERROR;
-        }
-        break;
-
-    case IFA_FLAGS:
-        if (mnl_attr_validate(attr, MNL_TYPE_U32) < 0) {
-            perror("mnl_attr_validate");
-            return MNL_CB_ERROR;
-        }
-        break;
-    }
-
-    if (type == IFA_ADDRESS) {
-        inet_ntop(ifa_family, mnl_attr_get_payload(attr), addr, sizeof addr);
-        printf("        address: %s\n", addr);
-    }
-    if (type == IFA_LOCAL) {
-        inet_ntop(ifa_family, mnl_attr_get_payload(attr), addr, sizeof addr);
-        printf("        local:   %s\n", addr);
-    }
-    if (type == IFA_LABEL) {
-        printf("        label:   %s\n", mnl_attr_get_str(attr));
-    }
-    if (type == IFA_BROADCAST) {
-        inet_ntop(ifa_family, mnl_attr_get_payload(attr), addr, sizeof addr);
-        printf("        brcst:   %s\n", addr);
-    }
-    if (type == IFA_ANYCAST) {
-        inet_ntop(ifa_family, mnl_attr_get_payload(attr), addr, sizeof addr);
-        printf("        anycast: %s\n", addr);
-    }
-    if (type == IFA_CACHEINFO) {
-        struct ifa_cacheinfo *ci = mnl_attr_get_payload(attr);
-
-        printf("        ifa_prefered: %u\n", ci->ifa_prefered);
-        printf("        ifa_valid:    %u\n", ci->ifa_valid);
-        printf("        cstamp:       %u\n", ci->cstamp);
-        printf("        tstamp:       %u\n", ci->tstamp);
-    }
-    if (type == IFA_FLAGS) {
-        unsigned int flags = mnl_attr_get_u32(attr);
-
-        printf("        flags:        %s\n", ifa_flags2str(flags));
-    }
-
-    return MNL_CB_OK;
 }
 
 
@@ -220,22 +132,6 @@ void parse_route_msg(const struct nlmsghdr *nlh)
 }
 
 
-void parse_addr_msg(const struct nlmsghdr *nlh)
-{
-    char ifname[IF_NAMESIZE];
-    const struct ifaddrmsg *ifa = mnl_nlmsg_get_payload(nlh);
-
-    printf("  nlmsg_type:  %s\n", nlmsg_type2str(nlh->nlmsg_type));
-    printf("    ifa_family:    %s\n", ifa_family2str(ifa->ifa_family));
-    printf("    ifa_prefixlen: %u\n", ifa->ifa_prefixlen);
-    printf("    ifa_flags:     %s\n", ifa_flags2str(ifa->ifa_flags));
-    printf("    ifa_scope:     %s\n", rtm_scope2str(ifa->ifa_scope));
-    printf("    ifa_index:     %s (%d)\n", if_indextoname(ifa->ifa_index, ifname), ifa->ifa_index);
-
-    mnl_attr_parse(nlh, sizeof *ifa, parse_addr_attr_cb, (void *)(uintptr_t)ifa->ifa_family);
-}
-
-
 int nl_msg_cb(const struct nlmsghdr *nlh, void *data)
 {
     switch (nlh->nlmsg_type) {
@@ -243,28 +139,9 @@ int nl_msg_cb(const struct nlmsghdr *nlh, void *data)
     case RTM_DELROUTE:
         parse_route_msg(nlh);
         break;
-    case RTM_NEWADDR:
-    case RTM_DELADDR:
-        parse_addr_msg(nlh);
-        break;
     }
 
     return MNL_CB_OK;
-}
-
-
-void nl_cb(EV_P_ ev_io *w, int revents)
-{
-    int len;
-    char buf[MNL_SOCKET_BUFFER_SIZE];
-    struct mnl_socket *nl = w->data;
-
-    printf("### nl_cb ###\n");
-    len = mnl_socket_recvfrom(nl, buf, sizeof buf);
-
-    if (len > 0) {
-        mnl_cb_run(buf, len, 0, 0, nl_msg_cb, NULL);
-    }
 }
 
 
@@ -272,7 +149,7 @@ int join_mcast_groups(struct mnl_socket *nl)
 {
     int groups[] = {
         //RTNLGRP_LINK,
-        RTNLGRP_IPV4_IFADDR,
+        //RTNLGRP_IPV4_IFADDR,
         //RTNLGRP_IPV6_IFADDR,
         RTNLGRP_IPV4_ROUTE,
         //RTNLGRP_IPV6_ROUTE,
@@ -291,6 +168,61 @@ int join_mcast_groups(struct mnl_socket *nl)
 }
 
 
+unsigned int seq, portid;
+
+
+void receive_nl_msg(struct mnl_socket *nl)
+{
+    char buf[MNL_SOCKET_BUFFER_SIZE];
+    int len;
+
+    len = mnl_socket_recvfrom(nl, buf, sizeof buf);
+
+    if (len > 0) {
+        mnl_cb_run(buf, len, seq, portid, nl_msg_cb, NULL);
+    }
+}
+
+void request_route_dump(struct mnl_socket *nl)
+{
+    char buf[MNL_SOCKET_BUFFER_SIZE];
+    struct nlmsghdr *nlh;
+    struct rtmsg *rtm;
+
+    memset(buf, 0, sizeof buf);
+    nlh = mnl_nlmsg_put_header(buf);
+    nlh->nlmsg_type = RTM_GETROUTE;
+	nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+	nlh->nlmsg_seq = ++seq;
+    nlh->nlmsg_pid = portid;
+    rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(struct rtmsg));
+    rtm->rtm_family = AF_INET;
+
+    if (mnl_socket_sendto(nl, buf, nlh->nlmsg_len) < 0) {
+        perror("mnl_socket_sendto");
+    }
+}
+
+
+void nl_cb(EV_P_ ev_io *w, int revents)
+{
+    struct mnl_socket *nl = w->data;
+
+    printf("### nl_cb ###\n");
+    receive_nl_msg(nl);
+}
+
+
+void timeout_cb(EV_P_ ev_timer *w, int revents)
+{
+    struct mnl_socket *nl = w->data;
+
+    printf("### timeout ###\n");
+    ev_timer_stop(EV_A_ w);
+    request_route_dump(nl);
+}
+
+
 int main(int argc, char *argv[])
 {
     int ret = EXIT_FAILURE;
@@ -298,20 +230,24 @@ int main(int argc, char *argv[])
 
     struct ev_loop *loop = EV_DEFAULT;
     ev_io nl_watcher;
-    ev_timer timeout_watcher;
+    ev_timer route_timeout_watcher;
 
     // open netlink
     nl = mnl_socket_open2(NETLINK_ROUTE, SOCK_NONBLOCK);
     if (nl != NULL) {
         if (mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) == 0) {
+            portid = mnl_socket_get_portid(nl);
+            seq = time(NULL);
+
             if (join_mcast_groups(nl) == 0) {
                 // init event loop
                 ev_io_init(&nl_watcher, nl_cb, mnl_socket_get_fd(nl), EV_READ);
                 nl_watcher.data = nl;
                 ev_io_start(loop, &nl_watcher);
 
-                ev_timer_init(&timeout_watcher, timeout_cb, 50.0, 0.0);
-                ev_timer_start(loop, &timeout_watcher);
+                ev_timer_init(&route_timeout_watcher, timeout_cb, 0.0, 1.0);
+                route_timeout_watcher.data = nl;
+                ev_timer_again(loop, &route_timeout_watcher);
 
                 ev_run(loop, 0);
                 ret = EXIT_SUCCESS;
