@@ -1,17 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <limits.h>
 
 #include <time.h>
-#include <libmnl/libmnl.h>
-#include <linux/rtnetlink.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <net/if.h>  // for if_indextoname
+#include <net/if.h>
+
+#include <libmnl/libmnl.h>
+#include <linux/rtnetlink.h>
 #include <ev.h>
 
-#include "nlutils.h"
+
+char *interface;
+bool route_dump_in_progress;
+bool def_route_on_interface;
+bool def_route_on_interface_prev;
+
+ev_io nl_watcher;
+ev_timer route_timeout_watcher;
 
 
 void syntax(void)
@@ -28,107 +37,49 @@ void syntax(void)
 }
 
 
-size_t af_addr_size(unsigned char family)
-{
-    switch (family) {
-    case AF_INET:
-        return sizeof(struct in_addr);
-    case AF_INET6:
-        return sizeof(struct in6_addr);
-    default:
-        return UINT_MAX;
-    }
-}
-
-
-int parse_route_attr_cb(const struct nlattr *attr, void *data)
-{
-    if (mnl_attr_type_valid(attr, RTA_MAX) < 0)
-		return MNL_CB_OK;
-
-    char ifname[IF_NAMESIZE];
-    char addr[INET6_ADDRSTRLEN];
-    unsigned char rtm_family = (unsigned char)(uintptr_t)data;
-    size_t addrsize = af_addr_size(rtm_family);
-    int type = mnl_attr_get_type(attr);
-
-    printf("      rta_type: %s\n", rtm_rta_type2str(type));
-
-    switch (type) {
-    case RTA_DST:
-    case RTA_GATEWAY:
-        if (mnl_attr_validate2(attr, MNL_TYPE_BINARY, addrsize) < 0) {
-            perror("mnl_attr_validate2");
-            return MNL_CB_ERROR;
-        }
-        break;
-
-    case RTA_OIF:
-    case RTA_PRIORITY:
-    case RTA_TABLE:
-        if (mnl_attr_validate(attr, MNL_TYPE_U32) < 0) {
-            perror("mnl_attr_validate");
-            return MNL_CB_ERROR;
-        }
-        break;
-
-    case RTA_PREF:
-        if (mnl_attr_validate(attr, MNL_TYPE_U8) < 0) {
-            perror("mnl_attr_validate");
-            return MNL_CB_ERROR;
-        }
-        break;
-    }
-
-    if (type == RTA_DST) {
-        inet_ntop(rtm_family, mnl_attr_get_payload(attr), addr, sizeof addr);
-        printf("        dst:   %s\n", addr);
-    }
-    if (type == RTA_GATEWAY) {
-        inet_ntop(rtm_family, mnl_attr_get_payload(attr), addr, sizeof addr);
-        printf("        gw:    %s\n", addr);
-    }
-    if (type == RTA_OIF) {
-        int idx = mnl_attr_get_u32(attr);
-
-        printf("        oif:   %s (%d)\n", if_indextoname(idx, ifname), idx);
-    }
-    if (type == RTA_PRIORITY) {
-        int prio = mnl_attr_get_u32(attr);
-
-        printf("        prio:  %d\n", prio);
-    }
-    if (type == RTA_TABLE) {
-        unsigned int table = mnl_attr_get_u32(attr);
-
-        printf("        table: %s\n", rtm_table2str(table));
-    }
-    if (type == RTA_PREF) {
-        unsigned char pref = mnl_attr_get_u8(attr);
-
-        printf("        pref:  %s\n", rta_pref2str(pref));
-    }
-
-    return MNL_CB_OK;
-}
-
-
 void parse_route_msg(const struct nlmsghdr *nlh)
 {
+    char ifname[IF_NAMESIZE];
+    const struct nlattr *attr;
     const struct rtmsg *rtm = mnl_nlmsg_get_payload(nlh);
 
-    printf("  nlmsg_type:  %s\n", nlmsg_type2str(nlh->nlmsg_type));
-    printf("    rtm_family:   %s\n", rtm_family2str(rtm->rtm_family));
-    printf("    rtm_dst_len:  %3u\n", rtm->rtm_dst_len);
-    printf("    rtm_src_len:  %3u\n", rtm->rtm_src_len);
-    printf("    rtm_tos:      %3u\n", rtm->rtm_tos);
-    printf("    rtm_table:    %s\n", rtm_table2str(rtm->rtm_table));
-    printf("    rtm_protocol: %s\n", rtm_protocol2str(rtm->rtm_protocol));
-    printf("    rtm_scope:    %s\n", rtm_scope2str(rtm->rtm_scope));
-    printf("    rtm_type:     %s\n", rtm_type2str(rtm->rtm_type));
-    printf("    rtm_flags:    %08X: %s\n", rtm->rtm_flags, rtm_flags2str(rtm->rtm_flags));
+    mnl_attr_for_each(attr, nlh, sizeof *rtm) {
+        if (mnl_attr_type_valid(attr, RTA_MAX) > 0) {
+            int type = mnl_attr_get_type(attr);
 
-    mnl_attr_parse(nlh, sizeof *rtm, parse_route_attr_cb, (void *)(uintptr_t)rtm->rtm_family);
+            if (type == RTA_OIF) {
+                if (mnl_attr_validate(attr, MNL_TYPE_U32) >= 0) {
+                    int idx = mnl_attr_get_u32(attr);
+
+                    if (if_indextoname(idx, ifname) == NULL) {
+                        ifname[0] = '\0';
+                    }
+                }
+            }
+        }
+    }
+
+    if (strncmp(interface, ifname, IF_NAMESIZE) == 0) {
+        if (!route_dump_in_progress) {
+            if (!ev_is_active(&route_timeout_watcher)) {
+                // route change on monitored interface detected:
+                // start timer
+                printf("route change detected\n");
+                ev_timer_again(EV_DEFAULT_ &route_timeout_watcher);
+            }
+        }
+        else {
+            if (nlh->nlmsg_type == RTM_NEWROUTE &&
+                rtm->rtm_family == AF_INET &&
+                rtm->rtm_dst_len == 0 &&
+                rtm->rtm_src_len == 0 &&
+                rtm->rtm_table == RT_TABLE_MAIN) {
+                // default route to monitored interface found
+                printf("default route found\n");
+                def_route_on_interface = true;
+            }
+        }
+    }
 }
 
 
@@ -145,28 +96,22 @@ int nl_msg_cb(const struct nlmsghdr *nlh, void *data)
 }
 
 
-int join_mcast_groups(struct mnl_socket *nl)
+int nl_dump_complete_cb(const struct nlmsghdr *nlh, void *data)
 {
-    int groups[] = {
-        //RTNLGRP_LINK,
-        //RTNLGRP_IPV4_IFADDR,
-        //RTNLGRP_IPV6_IFADDR,
-        RTNLGRP_IPV4_ROUTE,
-        //RTNLGRP_IPV6_ROUTE,
-    };
-    int ret = 0;
-    size_t i;
+    route_dump_in_progress = false;
 
-    for (i = 0; i < MNL_ARRAY_SIZE(groups); i++) {
-        if (mnl_socket_setsockopt(nl, NETLINK_ADD_MEMBERSHIP,
-                                  &groups[i], sizeof groups[i]) != 0) {
-            ret = 1;
-            break;
-        }
+    if (def_route_on_interface != def_route_on_interface_prev) {
+        def_route_on_interface_prev = def_route_on_interface;
+        printf("state change detected: %s\n",
+                def_route_on_interface ? "ON" : "OFF");
     }
-    return ret;
+    return MNL_CB_STOP;
 }
 
+
+mnl_cb_t nlmsg_cb_array[NLMSG_MIN_TYPE] = {
+	[NLMSG_DONE]	= nl_dump_complete_cb,
+};
 
 unsigned int seq, portid;
 
@@ -179,15 +124,20 @@ void receive_nl_msg(struct mnl_socket *nl)
     len = mnl_socket_recvfrom(nl, buf, sizeof buf);
 
     if (len > 0) {
-        mnl_cb_run(buf, len, seq, portid, nl_msg_cb, NULL);
+        mnl_cb_run2(buf, len, seq, portid, nl_msg_cb, NULL,
+                    nlmsg_cb_array, NLMSG_MIN_TYPE);
     }
 }
+
 
 void request_route_dump(struct mnl_socket *nl)
 {
     char buf[MNL_SOCKET_BUFFER_SIZE];
     struct nlmsghdr *nlh;
     struct rtmsg *rtm;
+
+    def_route_on_interface = false;
+    route_dump_in_progress = true;
 
     memset(buf, 0, sizeof buf);
     nlh = mnl_nlmsg_put_header(buf);
@@ -204,11 +154,29 @@ void request_route_dump(struct mnl_socket *nl)
 }
 
 
+int join_mcast_groups(struct mnl_socket *nl)
+{
+    int groups[] = {
+        RTNLGRP_IPV4_ROUTE,
+    };
+    int ret = 0;
+    size_t i;
+
+    for (i = 0; i < MNL_ARRAY_SIZE(groups); i++) {
+        if (mnl_socket_setsockopt(nl, NETLINK_ADD_MEMBERSHIP,
+                                  &groups[i], sizeof groups[i]) != 0) {
+            ret = 1;
+            break;
+        }
+    }
+    return ret;
+}
+
+
 void nl_cb(EV_P_ ev_io *w, int revents)
 {
     struct mnl_socket *nl = w->data;
 
-    printf("### nl_cb ###\n");
     receive_nl_msg(nl);
 }
 
@@ -217,7 +185,6 @@ void timeout_cb(EV_P_ ev_timer *w, int revents)
 {
     struct mnl_socket *nl = w->data;
 
-    printf("### timeout ###\n");
     ev_timer_stop(EV_A_ w);
     request_route_dump(nl);
 }
@@ -227,10 +194,16 @@ int main(int argc, char *argv[])
 {
     int ret = EXIT_FAILURE;
     struct mnl_socket *nl;
-
     struct ev_loop *loop = EV_DEFAULT;
-    ev_io nl_watcher;
-    ev_timer route_timeout_watcher;
+
+    if (argc != 2) {
+        syntax();
+        return ret;
+    }
+
+    interface = argv[1];
+    def_route_on_interface = def_route_on_interface_prev = false;
+    route_dump_in_progress = false;
 
     // open netlink
     nl = mnl_socket_open2(NETLINK_ROUTE, SOCK_NONBLOCK);
@@ -245,9 +218,9 @@ int main(int argc, char *argv[])
                 nl_watcher.data = nl;
                 ev_io_start(loop, &nl_watcher);
 
-                ev_timer_init(&route_timeout_watcher, timeout_cb, 0.0, 1.0);
+                ev_timer_init(&route_timeout_watcher, timeout_cb, 0.0, 2.0);
                 route_timeout_watcher.data = nl;
-                ev_timer_again(loop, &route_timeout_watcher);
+                ev_timer_start(loop, &route_timeout_watcher);
 
                 ev_run(loop, 0);
                 ret = EXIT_SUCCESS;
