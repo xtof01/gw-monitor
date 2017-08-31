@@ -4,23 +4,33 @@
 #include <string.h>
 #include <limits.h>
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 
-#include <libmnl/libmnl.h>
+#include <linux/input.h>
 #include <linux/rtnetlink.h>
+
+#include <libmnl/libmnl.h>
 #include <ev.h>
 
+
+const int up_seq[] = { 440, 554, 659, 0 };
+const int down_seq[] = { 659, 554, 440, 0 };
 
 char *interface;
 bool route_dump_in_progress;
 bool def_route_on_interface;
 bool def_route_on_interface_prev;
+int beep_fd;
 
 ev_io nl_watcher;
 ev_timer route_timeout_watcher;
+ev_timer beep_timeout_watcher;
 
 
 void syntax(void)
@@ -37,12 +47,60 @@ void syntax(void)
 }
 
 
+int open_beeper()
+{
+    const char *spkr_dev_name = "/dev/input/by-path/platform-pcspkr-event-spkr";
+    beep_fd = open(spkr_dev_name, O_WRONLY);
+
+    return beep_fd != -1;
+}
+
+
+void close_beeper()
+{
+    close(beep_fd);
+}
+
+
+void beep(int freq)
+{
+    struct input_event ev;
+
+    memset(&ev, 0, sizeof ev);
+    ev.type = EV_SND;
+    ev.code = SND_TONE;
+    ev.value = freq;
+
+    write(beep_fd, &ev, sizeof ev);
+}
+
+
+void play_sequence(const int *seq)
+{
+    beep(*seq);
+
+    beep_timeout_watcher.data = (void *)(seq + 1);
+
+    if (ev_is_active(&beep_timeout_watcher)) {
+        if (*seq == 0) {
+            ev_timer_stop(EV_DEFAULT_ &beep_timeout_watcher);
+        }
+    }
+    else {
+        if (*seq != 0) {
+            ev_timer_again(EV_DEFAULT_ &beep_timeout_watcher);
+        }
+    }
+}
+
+
 void parse_route_msg(const struct nlmsghdr *nlh)
 {
     char ifname[IF_NAMESIZE];
     const struct nlattr *attr;
     const struct rtmsg *rtm = mnl_nlmsg_get_payload(nlh);
 
+    ifname[0] = '\0';
     mnl_attr_for_each(attr, nlh, sizeof *rtm) {
         if (mnl_attr_type_valid(attr, RTA_MAX) > 0) {
             int type = mnl_attr_get_type(attr);
@@ -104,6 +162,12 @@ int nl_dump_complete_cb(const struct nlmsghdr *nlh, void *data)
         def_route_on_interface_prev = def_route_on_interface;
         printf("state change detected: %s\n",
                 def_route_on_interface ? "ON" : "OFF");
+        if (def_route_on_interface) {
+            play_sequence(up_seq);
+        }
+        else {
+            play_sequence(down_seq);
+        }
     }
     return MNL_CB_STOP;
 }
@@ -190,6 +254,13 @@ void timeout_cb(EV_P_ ev_timer *w, int revents)
 }
 
 
+void beep_cb(EV_P_ ev_timer *w, int revents)
+{
+    const int *seq = w->data;
+    play_sequence(seq);
+}
+
+
 int main(int argc, char *argv[])
 {
     int ret = EXIT_FAILURE;
@@ -209,38 +280,48 @@ int main(int argc, char *argv[])
     def_route_on_interface = def_route_on_interface_prev = false;
     route_dump_in_progress = false;
 
-    // open netlink
-    nl = mnl_socket_open2(NETLINK_ROUTE, SOCK_NONBLOCK);
-    if (nl != NULL) {
-        if (mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) == 0) {
-            portid = mnl_socket_get_portid(nl);
-            seq = time(NULL);
+    // open beeper device
+    if (open_beeper()) {
+        // open netlink
+        nl = mnl_socket_open2(NETLINK_ROUTE, SOCK_NONBLOCK);
+        if (nl != NULL) {
+            if (mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) == 0) {
+                portid = mnl_socket_get_portid(nl);
+                seq = time(NULL);
 
-            if (join_mcast_groups(nl) == 0) {
-                // init event loop
-                ev_io_init(&nl_watcher, nl_cb, mnl_socket_get_fd(nl), EV_READ);
-                nl_watcher.data = nl;
-                ev_io_start(loop, &nl_watcher);
+                if (join_mcast_groups(nl) == 0) {
+                    // init event loop
+                    ev_io_init(&nl_watcher, nl_cb, mnl_socket_get_fd(nl), EV_READ);
+                    nl_watcher.data = nl;
+                    ev_io_start(loop, &nl_watcher);
 
-                ev_timer_init(&route_timeout_watcher, timeout_cb, 0.0, 2.0);
-                route_timeout_watcher.data = nl;
-                ev_timer_start(loop, &route_timeout_watcher);
+                    ev_timer_init(&route_timeout_watcher, timeout_cb, 0.0, 2.0);
+                    route_timeout_watcher.data = nl;
+                    ev_timer_start(loop, &route_timeout_watcher);
 
-                ev_run(loop, 0);
-                ret = EXIT_SUCCESS;
+                    ev_timer_init(&beep_timeout_watcher, beep_cb, 0.0, 0.3);
+
+                    ev_run(loop, 0);
+                    ret = EXIT_SUCCESS;
+                }
+                else {
+                    perror("mnl_socket_setsockopt");
+                }
             }
             else {
-                perror("mnl_socket_setsockopt");
+                perror("mnl_socket_bind");
             }
+
+            mnl_socket_close(nl);
         }
         else {
-            perror("mnl_socket_bind");
+            perror("mnl_socket_open");
         }
 
-        mnl_socket_close(nl);
+        close_beeper();
     }
     else {
-        perror("mnl_socket_open");
+        perror("open pcspkr");
     }
 
     return ret;
