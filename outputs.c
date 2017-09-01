@@ -14,6 +14,27 @@ static int spkr_fd;
 static ev_timer beep_timeout_watcher;
 
 
+void set_led(bool on)
+{
+    const char *led_dev_name = "/sys/class/leds/apu2:1/brightness";
+    int led_fd = open(led_dev_name, O_WRONLY);
+
+    if (led_fd != -1) {
+        if (on) {
+            write(led_fd, "255", 3);
+        }
+        else {
+            write(led_fd, "0", 1);
+        }
+
+        close(led_fd);
+    }
+    else {
+        perror(led_dev_name);
+    }
+}
+
+
 static void open_pcspkr()
 {
     const char *spkr_dev_name = "/dev/input/by-path/platform-pcspkr-event-spkr";
@@ -76,7 +97,6 @@ static void beep_cb(EV_P_ ev_timer *w, int revents)
 int init_outputs()
 {
     spkr_fd = -1;
-
     ev_timer_init(&beep_timeout_watcher, beep_cb, 0.0, 0.3);
 
     return 1;

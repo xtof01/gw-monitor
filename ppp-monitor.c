@@ -108,9 +108,11 @@ int nl_dump_complete_cb(const struct nlmsghdr *nlh, void *data)
         printf("state change detected: %s\n",
                 def_route_on_interface ? "ON" : "OFF");
         if (def_route_on_interface) {
+            set_led(true);
             play_sequence(up_seq);
         }
         else {
+            set_led(false);
             play_sequence(down_seq);
         }
     }
