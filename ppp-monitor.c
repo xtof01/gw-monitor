@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <string.h>
 #include <time.h>
+#include <signal.h>
 #include <net/if.h>
 
 #include <linux/rtnetlink.h>
@@ -23,6 +24,7 @@ bool def_route_on_interface_prev;
 
 ev_io nl_watcher;
 ev_timer route_timeout_watcher;
+ev_signal stop_watcher;
 
 
 void syntax(void)
@@ -201,6 +203,12 @@ void timeout_cb(EV_P_ ev_timer *w, int revents)
 }
 
 
+void stop_cb(EV_P_ ev_signal *w, int revents)
+{
+    ev_break(EV_A_ EVBREAK_ALL);
+}
+
+
 int main(int argc, char *argv[])
 {
     int ret = EXIT_FAILURE;
@@ -238,6 +246,9 @@ int main(int argc, char *argv[])
                     ev_timer_init(&route_timeout_watcher, timeout_cb, 0.0, 2.0);
                     route_timeout_watcher.data = nl;
                     ev_timer_start(loop, &route_timeout_watcher);
+
+                    ev_signal_init(&stop_watcher, stop_cb, SIGTERM);
+                    ev_signal_start(loop, &stop_watcher);
 
                     ev_run(loop, 0);
                     ret = EXIT_SUCCESS;
