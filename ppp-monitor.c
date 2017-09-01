@@ -1,22 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <string.h>
 #include <limits.h>
-
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
+#include <string.h>
 #include <time.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <net/if.h>
 
-#include <linux/input.h>
 #include <linux/rtnetlink.h>
-
 #include <libmnl/libmnl.h>
 #include <ev.h>
+
+#include "outputs.h"
 
 
 const int up_seq[] = { 440, 554, 659, 0 };
@@ -26,11 +20,9 @@ char *interface;
 bool route_dump_in_progress;
 bool def_route_on_interface;
 bool def_route_on_interface_prev;
-int beep_fd;
 
 ev_io nl_watcher;
 ev_timer route_timeout_watcher;
-ev_timer beep_timeout_watcher;
 
 
 void syntax(void)
@@ -44,53 +36,6 @@ void syntax(void)
            "\n"
            "Options:\n"
            "  -h, --help  Show this help message and exit.\n");
-}
-
-
-int open_beeper()
-{
-    const char *spkr_dev_name = "/dev/input/by-path/platform-pcspkr-event-spkr";
-    beep_fd = open(spkr_dev_name, O_WRONLY);
-
-    return beep_fd != -1;
-}
-
-
-void close_beeper()
-{
-    close(beep_fd);
-}
-
-
-void beep(int freq)
-{
-    struct input_event ev;
-
-    memset(&ev, 0, sizeof ev);
-    ev.type = EV_SND;
-    ev.code = SND_TONE;
-    ev.value = freq;
-
-    write(beep_fd, &ev, sizeof ev);
-}
-
-
-void play_sequence(const int *seq)
-{
-    beep(*seq);
-
-    beep_timeout_watcher.data = (void *)(seq + 1);
-
-    if (ev_is_active(&beep_timeout_watcher)) {
-        if (*seq == 0) {
-            ev_timer_stop(EV_DEFAULT_ &beep_timeout_watcher);
-        }
-    }
-    else {
-        if (*seq != 0) {
-            ev_timer_again(EV_DEFAULT_ &beep_timeout_watcher);
-        }
-    }
 }
 
 
@@ -254,13 +199,6 @@ void timeout_cb(EV_P_ ev_timer *w, int revents)
 }
 
 
-void beep_cb(EV_P_ ev_timer *w, int revents)
-{
-    const int *seq = w->data;
-    play_sequence(seq);
-}
-
-
 int main(int argc, char *argv[])
 {
     int ret = EXIT_FAILURE;
@@ -280,8 +218,8 @@ int main(int argc, char *argv[])
     def_route_on_interface = def_route_on_interface_prev = false;
     route_dump_in_progress = false;
 
-    // open beeper device
-    if (open_beeper()) {
+    // prepare output devices
+    if (init_outputs()) {
         // open netlink
         nl = mnl_socket_open2(NETLINK_ROUTE, SOCK_NONBLOCK);
         if (nl != NULL) {
@@ -299,8 +237,6 @@ int main(int argc, char *argv[])
                     route_timeout_watcher.data = nl;
                     ev_timer_start(loop, &route_timeout_watcher);
 
-                    ev_timer_init(&beep_timeout_watcher, beep_cb, 0.0, 0.3);
-
                     ev_run(loop, 0);
                     ret = EXIT_SUCCESS;
                 }
@@ -317,8 +253,6 @@ int main(int argc, char *argv[])
         else {
             perror("mnl_socket_open");
         }
-
-        close_beeper();
     }
     else {
         perror("open pcspkr");
