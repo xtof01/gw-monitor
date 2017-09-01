@@ -1,0 +1,11 @@
+[Unit]
+Description=PPP Interface Monitor
+After=syslog.target
+
+[Service]
+Type=simple
+EnvironmentFile=-@sysconfdir@/sysconfig/ppp-monitor
+ExecStart=@sbindir@/ppp-monitor $IFNAME
+
+[Install]
+WantedBy=multi-user.target
