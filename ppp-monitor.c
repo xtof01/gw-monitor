@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <time.h>
 #include <signal.h>
 #include <net/if.h>
@@ -167,22 +169,44 @@ void request_route_dump(struct mnl_socket *nl)
 }
 
 
-int join_mcast_groups(struct mnl_socket *nl)
+struct mnl_socket *nl_open()
 {
-    int groups[] = {
-        RTNLGRP_IPV4_ROUTE,
-    };
-    int ret = 0;
-    size_t i;
+    int group = RTNLGRP_IPV4_ROUTE;
+    struct mnl_socket *nl;
 
-    for (i = 0; i < MNL_ARRAY_SIZE(groups); i++) {
-        if (mnl_socket_setsockopt(nl, NETLINK_ADD_MEMBERSHIP,
-                                  &groups[i], sizeof groups[i]) != 0) {
-            ret = 1;
-            break;
+    nl = mnl_socket_open(NETLINK_ROUTE);
+    if (nl != NULL) {
+        int fd = mnl_socket_get_fd(nl);
+
+        if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0) {
+
+            if (mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) == 0) {
+                portid = mnl_socket_get_portid(nl);
+                seq = time(NULL);
+
+                if (mnl_socket_setsockopt(nl, NETLINK_ADD_MEMBERSHIP,
+                                          &group, sizeof group) == 0) {
+                    return nl;
+                }
+                else {
+                    perror("mnl_socket_setsockopt");
+                }
+            }
+            else {
+                perror("mnl_socket_bind");
+            }
         }
+        else {
+            perror("fcntl");
+        }
+
+        mnl_socket_close(nl);
     }
-    return ret;
+    else {
+        perror("mnl_socket_open");
+    }
+
+    return NULL;
 }
 
 
@@ -221,7 +245,7 @@ int main(int argc, char *argv[])
     }
     if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
         syntax();
-	return EXIT_SUCCESS;
+        return EXIT_SUCCESS;
     }
 
     interface = argv[1];
@@ -231,44 +255,24 @@ int main(int argc, char *argv[])
     // prepare output devices
     if (init_outputs()) {
         // open netlink
-        nl = mnl_socket_open2(NETLINK_ROUTE, SOCK_NONBLOCK);
-        if (nl != NULL) {
-            if (mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) == 0) {
-                portid = mnl_socket_get_portid(nl);
-                seq = time(NULL);
+        if ((nl = nl_open()) != NULL) {
+            // init event loop
+            ev_io_init(&nl_watcher, nl_cb, mnl_socket_get_fd(nl), EV_READ);
+            nl_watcher.data = nl;
+            ev_io_start(loop, &nl_watcher);
 
-                if (join_mcast_groups(nl) == 0) {
-                    // init event loop
-                    ev_io_init(&nl_watcher, nl_cb, mnl_socket_get_fd(nl), EV_READ);
-                    nl_watcher.data = nl;
-                    ev_io_start(loop, &nl_watcher);
+            ev_timer_init(&route_timeout_watcher, timeout_cb, 0.0, 2.0);
+            route_timeout_watcher.data = nl;
+            ev_timer_start(loop, &route_timeout_watcher);
 
-                    ev_timer_init(&route_timeout_watcher, timeout_cb, 0.0, 2.0);
-                    route_timeout_watcher.data = nl;
-                    ev_timer_start(loop, &route_timeout_watcher);
+            ev_signal_init(&stop_watcher, stop_cb, SIGTERM);
+            ev_signal_start(loop, &stop_watcher);
 
-                    ev_signal_init(&stop_watcher, stop_cb, SIGTERM);
-                    ev_signal_start(loop, &stop_watcher);
-
-                    ev_run(loop, 0);
-                    ret = EXIT_SUCCESS;
-                }
-                else {
-                    perror("mnl_socket_setsockopt");
-                }
-            }
-            else {
-                perror("mnl_socket_bind");
-            }
+            ev_run(loop, 0);
+            ret = EXIT_SUCCESS;
 
             mnl_socket_close(nl);
         }
-        else {
-            perror("mnl_socket_open");
-        }
-    }
-    else {
-        perror("open pcspkr");
     }
 
     return ret;
