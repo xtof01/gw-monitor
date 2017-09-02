@@ -9,3 +9,4 @@ config.status
 configure
 *.o
 ppp-monitor
+ppp-monitor.service
