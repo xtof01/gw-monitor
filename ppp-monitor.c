@@ -72,6 +72,7 @@ void parse_route_msg(const struct nlmsghdr *nlh)
                 // route change on monitored interface detected:
                 // start timer
                 printf("route change detected\n");
+                fflush(stdout);
                 ev_timer_again(EV_DEFAULT_ &route_timeout_watcher);
             }
         }
@@ -83,6 +84,7 @@ void parse_route_msg(const struct nlmsghdr *nlh)
                 rtm->rtm_table == RT_TABLE_MAIN) {
                 // default route to monitored interface found
                 printf("default route found\n");
+                fflush(stdout);
                 def_route_on_interface = true;
             }
         }
@@ -111,6 +113,7 @@ int nl_dump_complete_cb(const struct nlmsghdr *nlh, void *data)
         def_route_on_interface_prev = def_route_on_interface;
         printf("state change detected: %s\n",
                 def_route_on_interface ? "ON" : "OFF");
+        fflush(stdout);
         if (def_route_on_interface) {
             set_led(true);
             play_sequence(up_seq);
@@ -254,6 +257,8 @@ int main(int argc, char *argv[])
 
     // prepare output devices
     if (init_outputs()) {
+        set_led(false);
+
         // open netlink
         if ((nl = nl_open()) != NULL) {
             // init event loop
@@ -271,6 +276,7 @@ int main(int argc, char *argv[])
             ev_run(loop, 0);
             ret = EXIT_SUCCESS;
 
+            set_led(false);
             mnl_socket_close(nl);
         }
     }
