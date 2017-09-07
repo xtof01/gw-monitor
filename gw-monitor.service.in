@@ -1,11 +1,11 @@
 [Unit]
-Description=PPP Interface Monitor
+Description=Default Gateway Monitor
 After=syslog.target
 
 [Service]
 Type=simple
-EnvironmentFile=-@sysconfdir@/sysconfig/ppp-monitor
-ExecStart=@sbindir@/ppp-monitor $IFNAME
+EnvironmentFile=-@sysconfdir@/sysconfig/gw-monitor
+ExecStart=@sbindir@/gw-monitor $IFNAME
 
 [Install]
 WantedBy=multi-user.target
