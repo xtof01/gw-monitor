@@ -31,9 +31,9 @@ ev_signal stop_watcher;
 
 void syntax(void)
 {
-    printf("Usage: ppp-monitor <ifname>\n"
+    printf("Usage: gw-monitor <ifname>\n"
            "\n"
-           "Monitor interface and give audible and visual alerts.\n"
+           "Monitor default gateway on interface and give audible and visual alerts.\n"
            "\n"
            "Arguments:\n"
            "  ifname      The interface to be monitored.\n"
