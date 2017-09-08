@@ -16,6 +16,7 @@ uninstall-local:
 
 sbin_PROGRAMS = gw-monitor
 systemdsystemunit_DATA = gw-monitor.service
+dist_man_MANS = gw-monitor.8
 
 AM_CFLAGS = $(MNL_CFLAGS)
 
