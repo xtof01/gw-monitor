@@ -5,7 +5,9 @@ AM_INIT_AUTOMAKE([foreign 1.11 -Wall -Wno-portability dist-xz no-dist-gzip])
 AM_SILENT_RULES([yes])
 AC_LANG([C])
 AC_PROG_CC
+AC_PROG_SED
 AC_PROG_INSTALL
+AC_PROG_MKDIR_P
 AC_CHECK_HEADER(ev.h, [], [AC_MSG_ERROR([ev.h not found])])
 AC_CHECK_LIB([ev], [ev_run], [], [AC_MSG_ERROR([libev not found])])
 

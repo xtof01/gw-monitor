@@ -1,5 +1,5 @@
 %.service: %.service.in $(top_builddir)/config.status
-	$(AM_V_GEN)sed					\
+	$(AM_V_GEN)$(SED)				\
 	    -e 's|[@]sbindir[@]|$(sbindir)|g'		\
 	    -e 's|[@]sysconfdir[@]|$(sysconfdir)|g'	\
 	    < $< > $@-t &&				\
