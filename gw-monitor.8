@@ -1,4 +1,4 @@
-.TH GW-MONITOR 8 "08 Sep 2017" "gw-monitor"
+.TH GW-MONITOR 8 "10 Sep 2017" "gw-monitor"
 .SH NAME
 gw-monitor \- Default Gateway Monitor
 .SH SYNOPSIS
@@ -7,10 +7,32 @@ gw-monitor \- Default Gateway Monitor
 .SH DESCRIPTION
 .B gw-monitor
 monitors the routing table and checks if the default route points to
-a specified interface.
+the interface specified as command-line parameter. As soon as this is
+the case, it plays a sound on the PC speaker device and turns on the
+second (i.e. middle one) of the APU2 onboard LEDs.
+.PP
+If the default route gets deleted (e.g. because the link was lost
+or disconnected) another sound is played and the LED is switched off.
 .SH OPTIONS
 .TP
 .BR -h ", " --help
 Show help message and exit.
+.TP
+.BR -v ", " --version
+Show version info and exit.
+.SH FILES
+.TP
+.I /dev/input/by-path/platform-pcspkr-event-spkr
+PC speaker device file. Kernel module
+.I pcspkr
+must be loaded for this file to be available.
+.TP
+.I /sys/class/leds/apu2:1/brightness
+Device file for controlling the second APU2 onboard LED. Kernel module
+.I leds_apu2
+must be loaded for this file to be available.
 .SH BUGS
-No known bugs.
+Please send bug reports to
+.UR christof@efkemann.net
+Christof Efkemann
+.UE .
