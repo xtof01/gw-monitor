@@ -99,6 +99,7 @@ int init_outputs()
 {
     spkr_fd = -1;
     ev_timer_init(&beep_timeout_watcher, beep_cb, 0.0, 0.3);
+    set_led(false);
 
     return 1;
 }

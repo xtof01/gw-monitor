@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <string.h>
+#include <getopt.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
@@ -31,15 +32,32 @@ ev_signal stop_watcher;
 
 void syntax(void)
 {
-    printf("Usage: gw-monitor <ifname>\n"
-           "\n"
+    printf("Usage: " PACKAGE_NAME " <interface>\n");
+}
+
+
+void help(void)
+{
+    syntax();
+    printf("\n"
            "Monitor default gateway on interface and give audible and visual alerts.\n"
            "\n"
            "Arguments:\n"
-           "  ifname      The interface to be monitored.\n"
+           "  interface      The interface to be monitored.\n"
            "\n"
            "Options:\n"
-           "  -h, --help  Show this help message and exit.\n");
+           "  -h, --help     Show this help message and exit.\n"
+           "  -v, --version  Show version info and exit.\n");
+}
+
+
+void version(void)
+{
+    printf(PACKAGE_STRING "\n"
+           "Copyright (C) 2017 Christof Efkemann.\n"
+           "License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n"
+           "This is free software: you are free to change and redistribute it.\n"
+           "There is NO WARRANTY, to the extent permitted by law.\n");
 }
 
 
@@ -128,7 +146,7 @@ int nl_dump_complete_cb(const struct nlmsghdr *nlh, void *data)
 
 
 mnl_cb_t nlmsg_cb_array[NLMSG_MIN_TYPE] = {
-	[NLMSG_DONE]	= nl_dump_complete_cb,
+    [NLMSG_DONE] = nl_dump_complete_cb,
 };
 
 unsigned int seq, portid;
@@ -238,27 +256,43 @@ void stop_cb(EV_P_ ev_signal *w, int revents)
 
 int main(int argc, char *argv[])
 {
+    int opt;
     int ret = EXIT_FAILURE;
     struct mnl_socket *nl;
     struct ev_loop *loop = EV_DEFAULT;
 
-    if (argc != 2) {
-        syntax();
-        return ret;
-    }
-    if (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
-        syntax();
-        return EXIT_SUCCESS;
+    // parse command line
+    const struct option options[] = {
+        { "help",    no_argument, 0, 'h' },
+        { "version", no_argument, 0, 'v' },
+        { 0,         0,           0,  0  },
+    };
+
+    while ((opt = getopt_long(argc, argv, "hv", options, NULL)) != -1) {
+        switch (opt) {
+        case 'h':
+            help();
+            return EXIT_SUCCESS;
+        case 'v':
+            version();
+            return EXIT_SUCCESS;
+        default:
+            syntax();
+            return EXIT_FAILURE;
+        }
     }
 
-    interface = argv[1];
+    if (optind + 1 != argc) {
+        syntax();
+        return EXIT_FAILURE;
+    }
+
+    interface = argv[optind];
     def_route_on_interface = def_route_on_interface_prev = false;
     route_dump_in_progress = false;
 
     // prepare output devices
     if (init_outputs()) {
-        set_led(false);
-
         // open netlink
         if ((nl = nl_open()) != NULL) {
             // init event loop
