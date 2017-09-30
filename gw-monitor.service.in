@@ -1,5 +1,6 @@
 [Unit]
 Description=Default Gateway Monitor
+Documentation=man:gw-monitor(8)
 After=syslog.target
 
 [Service]
