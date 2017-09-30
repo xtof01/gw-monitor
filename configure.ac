@@ -4,7 +4,7 @@ AC_CONFIG_AUX_DIR([.ac])
 AM_INIT_AUTOMAKE([foreign 1.11 -Wall -Wno-portability dist-xz no-dist-gzip])
 AM_SILENT_RULES([yes])
 AC_LANG([C])
-AC_PROG_CC
+AC_PROG_CC_C99
 AC_PROG_SED
 AC_PROG_INSTALL
 AC_PROG_MKDIR_P
