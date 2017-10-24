@@ -7,6 +7,11 @@ After=syslog.target
 Type=simple
 EnvironmentFile=-@sysconfdir@/sysconfig/gw-monitor
 ExecStart=@sbindir@/gw-monitor $IFNAME
+CapabilityBoundingSet=
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
