@@ -35,7 +35,7 @@ static ev_timer beep_timeout_watcher;
 
 void set_led(bool on)
 {
-    const char *led_dev_name = "/sys/class/leds/apu2:1/brightness";
+    const char *led_dev_name = "/sys/class/leds/apu2:green:2/brightness";
     int led_fd = open(led_dev_name, O_WRONLY);
 
     if (led_fd != -1) {
